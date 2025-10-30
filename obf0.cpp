@@ -1,36 +1,42 @@
 #include <cstddef>
+#include <llvm/CodeGen/MachineFunction.h>
+#include <llvm/IR/Constants.h>
 #include <random>
 #include <vector>
 
 #include <llvm/Pass.h>
-#include <llvm/Passes/PassPlugin.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/PassPlugin.h>
 
-#include <llvm/IR/CFG.h>
-#include <llvm/IR/Use.h>
-#include <llvm/IR/User.h>
-#include <llvm/IR/Constant.h>
 #include <llvm/IR/Analysis.h>
-#include <llvm/IR/IRBuilder.h>
-#include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
-#include <llvm/IR/Instruction.h>
+#include <llvm/IR/CFG.h>
+#include <llvm/IR/Constant.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InstrTypes.h>
+#include <llvm/IR/Instruction.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/IR/Use.h>
+#include <llvm/IR/User.h>
 
+#include <llvm/Transforms/Utils/BasicBlockUtils.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/SSAUpdater.h>
-#include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
-#include <llvm/Support/Casting.h>
 #include <llvm/Config/llvm-config.h>
+#include <llvm/Support/Casting.h>
+
+#include <llvm/IR/Verifier.h>
+#include <llvm/IR/NoFolder.h>
 
 using namespace llvm;
 
 namespace {
 
-Value *make_add0(IRBuilder<> &Builder, Value *lhs, Value *rhs) {
+template <typename T>
+Value *make_add0(IRBuilder<T> &Builder, Value *lhs, Value *rhs) {
     // rewrite to (~A&B)+(A&~B)+((A&B)<<1)
     Value *first = Builder.CreateAnd(Builder.CreateNot(lhs), rhs);
     Value *second = Builder.CreateAnd(lhs, Builder.CreateNot(rhs));
@@ -110,7 +116,7 @@ Value *make_opaque_value(IRBuilder<> &Builder, Value *v) {
     return VolatileVal;
 }
 
-void visit_opq(Function &F) {
+bool visit_opq(Function &F) {
     errs() << "(obf0-opq) obfuscating " << F.getName() << "\n";
 
     std::mt19937 random_generator(std::random_device{}());
@@ -195,6 +201,7 @@ void visit_opq(Function &F) {
             }
         }
 
+        // rewrite all future references of our values defined in the original block / cloned block with phis
         SmallVector<PHINode *, 8> NewPHIs;
         SSAUpdater Updater(&NewPHIs);
         for (Instruction &originalI : *bodyBB) {
@@ -227,11 +234,13 @@ void visit_opq(Function &F) {
             }
         }
     }
+    return !worklist.empty();
 }
 
-void visit_mba(Function &F) {
+bool visit_mba(Function &F) {
     errs() << "(obf0-mba) obfuscating " << F.getName() << "\n";
-    std::vector<Instruction *> add_worklist;
+    // if (true) return;
+    std::vector<BinaryOperator *> add_worklist;
     std::vector<Instruction *> sub_worklist;
 
     for (auto &BB : F) {
@@ -244,13 +253,13 @@ void visit_mba(Function &F) {
                 switch (BO->getOpcode()) {
                 case llvm::Instruction::Add: {
                     errs() << "(obf0-mba)\tqueuing rewrite (add) " << I << "\n";
-                    add_worklist.emplace_back(&I);
+                    add_worklist.emplace_back(BO);
                     break;
                 }
 
                 case llvm::Instruction::Sub: {
                     errs() << "(obf0-mba)\tqueuing rewrite (sub) " << I << "\n";
-                    sub_worklist.emplace_back(&I);
+                    sub_worklist.emplace_back(BO);
                     break;
                 }
 
@@ -264,16 +273,23 @@ void visit_mba(Function &F) {
     // We need the block context to avoid badref, so we need to make it a child of BO temporarily
     // Then we can replace the original instruction
     for (auto from : add_worklist) {
+        // break;
         IRBuilder<> Builder(from);
-        Instruction *to = dyn_cast<Instruction>(make_add0(Builder, from->getOperand(0), from->getOperand(1)));
-        ReplaceInstWithInst(from, to);
+        Value *to = make_add0(Builder, from->getOperand(0), from->getOperand(1));
+        // dodge constant folding ?
+        from->replaceAllUsesWith(to);
+        from->eraseFromParent();
     }
 
     for (auto from : sub_worklist) {
         IRBuilder<> Builder(from);
-        Instruction *to = dyn_cast<Instruction>(make_sub0(Builder, from->getOperand(0), from->getOperand(1)));
-        ReplaceInstWithInst(from, to);
+        Value *to = make_sub0(Builder, from->getOperand(0), from->getOperand(1));
+        // dodge constant folding ?
+        from->replaceAllUsesWith(to);
+        from->eraseFromParent();
     }
+
+    return !(add_worklist.empty() && sub_worklist.empty());
 }
 
 struct MixedBooleanArith : PassInfoMixin<MixedBooleanArith> {
@@ -281,9 +297,10 @@ struct MixedBooleanArith : PassInfoMixin<MixedBooleanArith> {
     MixedBooleanArith(int depth = 3) : m_depth(depth) {}
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
-        for (int i = 0; i < this->m_depth; i++)
-            visit_mba(F);
-        return PreservedAnalyses::none();
+        bool changed = false;
+        for (int i = 0; i < this->m_depth; i++) changed |= visit_mba(F);
+        if (!verifyFunction(F, &errs())) errs() << "verified\n";
+        return changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
     }
     // don't skip optnone
     static bool isRequired() { return true; }
@@ -293,9 +310,10 @@ struct OpaquePredicates : PassInfoMixin<OpaquePredicates> {
     int m_depth;
     OpaquePredicates(int depth = 1) : m_depth(depth) {}
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
-        for (int i = 0; i < m_depth; i++)
-            visit_opq(F);
-        return PreservedAnalyses::none();
+        bool changed = false;
+        for (int i = 0; i < m_depth; i++) changed |= visit_opq(F);
+        if (!verifyFunction(F, &errs())) errs() << "verified\n";
+        return changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
     }
     static bool isRequired() { return true; }
 };
@@ -304,13 +322,13 @@ struct OpaquePredicates : PassInfoMixin<OpaquePredicates> {
 llvm::PassPluginLibraryInfo getobf0PluginInfo() {
     return {LLVM_PLUGIN_API_VERSION, "obf0", LLVM_VERSION_STRING, [](PassBuilder &PB) {
                 PB.registerOptimizerLastEPCallback([&](ModulePassManager &MPM, auto, auto) {
-                    MPM.addPass(createModuleToFunctionPassAdaptor(MixedBooleanArith(3)));
-                    MPM.addPass(createModuleToFunctionPassAdaptor(OpaquePredicates(1)));
+                    MPM.addPass(createModuleToFunctionPassAdaptor(MixedBooleanArith(1)));
+                    // MPM.addPass(createModuleToFunctionPassAdaptor(OpaquePredicates(3)));
                     return true;
                 });
                 PB.registerPipelineParsingCallback([](StringRef PassName, FunctionPassManager &FPM, ...) {
-                    FPM.addPass(MixedBooleanArith(3));
-                    FPM.addPass(OpaquePredicates(1));
+                    FPM.addPass(MixedBooleanArith(1));
+                    // FPM.addPass(OpaquePredicates(3));
                     return true;
                 });
             }};
