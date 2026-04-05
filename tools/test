@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+TEST_SRC=simple.c
+
+[ ! -n "${LLVM_DIR}" ] && err "LLVM_DIR not set, run LLVM_DIR=... tools/env"
+
+[ -d "scratch" ] && rm -r scratch
+mkdir scratch; cd scratch
+
+$LLVM_DIR/bin/clang -O3 -flto -fpass-plugin=../libobf0.dylib ../src/test/$TEST_SRC -o ./test
+./test
+
+cd ..

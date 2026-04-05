@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+TEST_SRC=simple.c
+
+[ ! -n "${LLVM_DIR}" ] && err "LLVM_DIR not set, run export LLVM_DIR=..."
+
+[ -d "scratch" ] && rm -r scratch
+mkdir scratch; cd scratch
+
+$LLVM_DIR/bin/clang -O3 -flto -S -emit-llvm ../src/test/$TEST_SRC -o ./test.ll
+$LLVM_DIR/bin/opt -S --load-pass-plugin=../libobf0.dylib --passes="obf0" --disable-verify < test.ll > test_pass.ll
+$LLVM_DIR/bin/opt -passes=dot-cfg -disable-output test_pass.ll
+$LLVM_DIR/bin/opt -passes=dot-cfg -disable-output test_pass.ll
+$LLVM_DIR/bin/llc test_pass.ll
+$LLVM_DIR/bin/clang test_pass.s -o ./test_pass
+for f in .*.dot; do
+  f2="${f#.}"; dot -Tpng "$f" -o "${f2%.dot}.png"
+done
+
+cd ..

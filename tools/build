@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -e
+
+err() {
+    echo "$1" >&2
+    exit 1
+}
+
+[ ! -n "${LLVM_DIR}" ] && err "LLVM_DIR not set, run LLVM_DIR=... tools/env"
+
+[ ! -d "build" ] && cmake -DLT_LLVM_INSTALL_DIR=$LLVM_DIR -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -B build
+cmake --build build
+[ ! -f "libobf0.dylib" ] && ln -s build/libobf0.dylib .
