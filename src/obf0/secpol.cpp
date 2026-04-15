@@ -28,5 +28,5 @@ namespace obf0::secpol
 	}
 
 	uniform_policy::uniform_policy( bool policy ) : m_policy( policy ) {}
-	bool uniform_policy::is_applicable( std::string_view symbol_name ) const { return true; }
+	bool uniform_policy::is_applicable( std::string_view symbol_name ) const { return m_policy; }
 }  // namespace obf0::secpol
