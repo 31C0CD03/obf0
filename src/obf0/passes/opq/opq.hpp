@@ -12,34 +12,34 @@
 
 namespace obf0::opq
 {
-	bool visit_opq( llvm::Function& F );
+	bool visit_opq( llvm::Function& f );
 
 	template<typename T>
-	struct OpaquePredicates : llvm::PassInfoMixin<OpaquePredicates<T>>
+	struct opaque_predicates : llvm::PassInfoMixin<opaque_predicates<T>>
 	{
 		static_assert( std::is_base_of<secpol::policy, T>::value );
 
 		int m_depth;
 		T m_policy;
 
-		OpaquePredicates( int depth = 1 ) : m_depth( depth ), m_policy( T{} ) {}
-		OpaquePredicates( int depth, T policy ) : m_depth( depth ), m_policy( policy ) {}
+		opaque_predicates( int depth = 1 ) : m_depth( depth ), m_policy( T{} ) {}
+		opaque_predicates( int depth, T policy ) : m_depth( depth ), m_policy( policy ) {}
 
-		llvm::PreservedAnalyses run( llvm::Function& F, llvm::FunctionAnalysisManager& )
+		llvm::PreservedAnalyses run( llvm::Function& f, llvm::FunctionAnalysisManager& )
 		{
-			if ( !m_policy.is_applicable( F.getName().str() ) )
+			if ( !m_policy.is_applicable( f.getName().str() ) )
 				return llvm::PreservedAnalyses::all();
 
 			bool changed = false;
 			for ( int i = 0; i < m_depth; i++ )
-				changed |= visit_opq( F );
-			if ( !verifyFunction( F, &llvm::errs() ) )
+				changed |= visit_opq( f );
+			if ( !verifyFunction( f, &llvm::errs() ) )
 				llvm::errs() << "verified\n";
 			return changed ? llvm::PreservedAnalyses::none() : llvm::PreservedAnalyses::all();
 		}
 
 		// don't skip optnone
-		static bool isRequired() { return true; }
+		static bool isRequired() { return true; }  // NOLINT(readability-identifier-naming)
 	};
 }  // namespace obf0::opq
 

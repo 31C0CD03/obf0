@@ -15,14 +15,14 @@ namespace
 	static const auto MBA_POLICY = obf0::secpol::uniform_policy( true );
 
 	static const auto OPQ_DEPTH  = 2;
-	static const auto OPQ_POLICY = obf0::secpol::uniform_policy( false );
+	static const auto OPQ_POLICY = obf0::secpol::uniform_policy( true );
 
 	static const auto ICALL_POLICY = obf0::secpol::uniform_policy();
 
 	void addObf0Passes( llvm::FunctionPassManager& FPM )
 	{
 		FPM.addPass( obf0::mba::mixed_boolean_arith<decltype( MBA_POLICY )>( MBA_DEPTH, MBA_POLICY ) );
-		FPM.addPass( obf0::opq::OpaquePredicates<decltype( OPQ_POLICY )>( OPQ_DEPTH, OPQ_POLICY ) );
+		FPM.addPass( obf0::opq::opaque_predicates<decltype( OPQ_POLICY )>( OPQ_DEPTH, OPQ_POLICY ) );
 		FPM.addPass( obf0::icall::IndirectCall<decltype( ICALL_POLICY )>( ICALL_POLICY ) );
 	}
 
