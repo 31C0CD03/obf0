@@ -12,7 +12,7 @@ namespace
 	static const char* PLUGIN_NAME = "obf0";
 
 	static const auto MBA_DEPTH  = 2;
-	static const auto MBA_POLICY = obf0::secpol::uniform_policy( false );
+	static const auto MBA_POLICY = obf0::secpol::uniform_policy( true );
 
 	static const auto OPQ_DEPTH  = 2;
 	static const auto OPQ_POLICY = obf0::secpol::uniform_policy( false );
@@ -21,7 +21,7 @@ namespace
 
 	void addObf0Passes( llvm::FunctionPassManager& FPM )
 	{
-		FPM.addPass( obf0::mba::MixedBooleanArith<decltype( MBA_POLICY )>( MBA_DEPTH, MBA_POLICY ) );
+		FPM.addPass( obf0::mba::mixed_boolean_arith<decltype( MBA_POLICY )>( MBA_DEPTH, MBA_POLICY ) );
 		FPM.addPass( obf0::opq::OpaquePredicates<decltype( OPQ_POLICY )>( OPQ_DEPTH, OPQ_POLICY ) );
 		FPM.addPass( obf0::icall::IndirectCall<decltype( ICALL_POLICY )>( ICALL_POLICY ) );
 	}

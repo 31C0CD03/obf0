@@ -4,55 +4,89 @@
 
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/InstrTypes.h>
+#include <llvm/IR/NoFolder.h>
 #include <llvm/Support/Casting.h>
 
+#include <obf0/utility/llvm.hpp>
+
+#define OPAQUE( x ) obf0::util::make_black_box( builder, x )
 namespace obf0::mba
 {
-	llvm::Value* make_add0( llvm::IRBuilder<llvm::NoFolder>& Builder, llvm::Value* lhs, llvm::Value* rhs )
+	llvm::Value* make_add0( llvm::IRBuilder<llvm::NoFolder>& builder, llvm::Value* lhs, llvm::Value* rhs )
 	{
 		// rewrite to (~A&B)+(A&~B)+((A&B)<<1)
-		llvm::Value* first  = Builder.CreateAnd( Builder.CreateNot( lhs ), rhs );
-		llvm::Value* second = Builder.CreateAnd( lhs, Builder.CreateNot( rhs ) );
-		llvm::Value* third  = Builder.CreateShl( Builder.CreateAnd( lhs, rhs ), llvm::ConstantInt::get( lhs->getType(), 1 ) );
+		// llvm::Value* first = obf0::util::make_black_box( builder, builder.CreateAnd( builder.CreateNot( lhs ), rhs ) );
+		llvm::Value* first = OPAQUE( builder.CreateAnd( builder.CreateNot( lhs ), rhs ) );
 
-		return Builder.CreateAdd( Builder.CreateAdd( first, second ), third );
+		llvm::Value* second = OPAQUE( builder.CreateAnd( lhs, builder.CreateNot( rhs ) ) );
+		llvm::Value* third  = OPAQUE( builder.CreateShl( builder.CreateAnd( lhs, rhs ), llvm::ConstantInt::get( lhs->getType(), 1 ) ) );
+
+		return builder.CreateAdd( builder.CreateAdd( first, second ), third );
 	}
 
-	llvm::Value* make_sub0( llvm::IRBuilder<llvm::NoFolder>& Builder, llvm::Value* lhs, llvm::Value* rhs )
+	llvm::Value* make_sub1( llvm::IRBuilder<llvm::NoFolder>& builder, llvm::Value* lhs, llvm::Value* rhs )
 	{
 		// rewrite to ~((~A)+B)
-		llvm::Value* first = Builder.CreateAdd( Builder.CreateNot( lhs ), rhs );
-		return Builder.CreateNot( first );
+		llvm::Value* first = OPAQUE( builder.CreateAdd( builder.CreateNot( lhs ), rhs ) );
+		return builder.CreateNot( first );
 	}
 
-	bool visit_mba( llvm::Function& F )
+	llvm::Value* make_sub0( llvm::IRBuilder<llvm::NoFolder>& builder, llvm::Value* x, llvm::Value* y )
 	{
-		llvm::errs() << "(obf0-mba) obfuscating " << F.getName() << "\n";
+		using namespace llvm;
+
+		// x ^ y
+		Value* xor_xy = builder.CreateXor( x, y, "xor_xy" );
+
+		// ~x  (bitwise NOT)
+		Value* not_x = builder.CreateNot( x, "not_x" );
+
+		// (~x & y)
+		Value* and_term = builder.CreateAnd( not_x, y, "and_term" );
+
+		// constant 2 (same type as x/y)
+		Value* two = ConstantInt::get( x->getType(), 2 );
+
+		// 2 * (~x & y)
+		Value* mul_term = builder.CreateMul( two, and_term, "mul_term" );
+
+		// (x ^ y) - 2 * (~x & y)
+		Value* result = builder.CreateSub( xor_xy, mul_term, "mba_sub" );
+
+		return result;
+	}
+
+	bool visit_mba( llvm::Function& f )
+	{
+		if ( f.isDeclaration() )
+			return false;
+
+		llvm::errs() << "(obf0-mba) obfuscating " << f.getName() << "\n";
 		std::vector<llvm::BinaryOperator*> add_worklist;
 		std::vector<llvm::Instruction*> sub_worklist;
 
-		for ( auto& BB : F )
+		for ( auto& bb : f )
 		{
-			for ( auto& I : BB )
+			for ( auto& i : bb )
 			{
-				if ( llvm::BinaryOperator* BO = llvm::dyn_cast<llvm::BinaryOperator>( &I ) )
+				if ( llvm::BinaryOperator* bo = llvm::dyn_cast<llvm::BinaryOperator>( &i ) )
 				{
 					// MBA operates only on integer types
-					if ( !BO->getType()->isIntegerTy() )
+					if ( !bo->getType()->isIntegerTy() )
 						continue;
 
 					// don't modify the basic block while iterating the basic block
-					switch ( BO->getOpcode() )
+					switch ( bo->getOpcode() )
 					{
 						case llvm::Instruction::Add: {
-							llvm::errs() << "(obf0-mba)\tqueuing rewrite (add) " << I << "\n";
-							add_worklist.emplace_back( BO );
+							llvm::errs() << "(obf0-mba)\tqueuing rewrite (add) " << i << "\n";
+							add_worklist.emplace_back( bo );
 							break;
 						}
 
 						case llvm::Instruction::Sub: {
-							llvm::errs() << "(obf0-mba)\tqueuing rewrite (sub) " << I << "\n";
-							sub_worklist.emplace_back( BO );
+							llvm::errs() << "(obf0-mba)\tqueuing rewrite (sub) " << i << "\n";
+							sub_worklist.emplace_back( bo );
 							break;
 						}
 
@@ -67,16 +101,16 @@ namespace obf0::mba
 		// Then we can replace the original instruction
 		for ( auto from : add_worklist )
 		{
-			llvm::IRBuilder<llvm::NoFolder> Builder( from );
-			llvm::Value* to = make_add0( Builder, from->getOperand( 0 ), from->getOperand( 1 ) );
+			llvm::IRBuilder<llvm::NoFolder> builder( from );
+			llvm::Value* to = make_add0( builder, from->getOperand( 0 ), from->getOperand( 1 ) );
 			from->replaceAllUsesWith( to );
 			from->eraseFromParent();
 		}
 
 		for ( auto from : sub_worklist )
 		{
-			llvm::IRBuilder<llvm::NoFolder> Builder( from );
-			llvm::Value* to = make_sub0( Builder, from->getOperand( 0 ), from->getOperand( 1 ) );
+			llvm::IRBuilder<llvm::NoFolder> builder( from );
+			llvm::Value* to = make_sub0( builder, from->getOperand( 0 ), from->getOperand( 1 ) );
 			from->replaceAllUsesWith( to );
 			from->eraseFromParent();
 		}
